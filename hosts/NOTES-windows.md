@@ -2,6 +2,89 @@
 
 Owner: the Windows agent. Scope: `hosts/sill-host-windows/**` and this file.
 
+## Status (2026-10-19: Sill.exe, the tray app)
+
+- `Sill.exe` (src/bin/sill.rs, `windows_subsystem = "windows"`): the host as Sill.app is on the Mac,
+  with no console. The crate is a library (src/lib.rs) with two binaries; `sill-host-windows.exe`
+  is the console host as before (as SillHost). Sill.exe: one per sign-in session (a second launch
+  makes the first say where it is); settings in `%APPDATA%\Sill\settings.json` (port 7454 by
+  default so one firewall rule fits; frame rate, quality, resolution, the away pair, speed), saved
+  when the menu or a device changes them; the log in `%LOCALAPPDATA%\Sill\Sill.log` (time-stamped,
+  moved to Sill.1.log at 10 MB, no pairing code or link in it) and in memory for Show Log; TLS
+  pairing on; the host started on a worker thread after the icon shows.
+- The tray menu, Sill.app's (`traymenu.rs`): the status card's header and lines (Waiting for a
+  Device, ‹iPad› Connected, Streaming to ‹iPad›, Sill Couldn't Start; each device's fps, frame age,
+  RTT, route; the stream's window, size, fps, Mbps), ⚠ rows (‹device› Wants to Pair, Allow Sill
+  Through Windows Firewall…, This Network Is Public…, Try Again), Frame Rate, Quality (an off-preset
+  bitrate checked and greyed), Resolution, Windows Firewall (in place of Permissions), Launch at
+  Login, Pair iPhone or iPad…, Show Log…, Quit Sill. Left out for now: the Settings window, Remote
+  Access, and the Mac-only Virtual Display and Direct Wireless.
+- Verified on this PC (Windows 11, 175 %): the menu in Windows 11's own style (screenshots), each
+  item through the test hook (Quality › Pro: one "Settings:" line, settings.json, ✓ moved; Pair
+  brings the window up; Show Log; Launch at Login writes and removes the Run value); Quit (goodbye,
+  "Stopped.", the icon removed, within 20 ms); the four glyphs at 28 px, white on the dark taskbar;
+  the firewall item Allowed with the TCP 7454 port rule and Not Allowed on an unused port (the ⚠
+  row and glyph); two hosts on one port refused; Sill.exe's icon and version in Explorer; Launch at
+  Login across a real sign-in (this XPS 13, 2026-10-19: Sill started with Windows, in the tray);
+  switching Windows between light and dark while it runs (the menu, the pairing and log windows
+  followed); Allow… through UAC (the port rule disabled: Not Allowed and the ⚠ row; the prompt
+  declined: nothing changed; approved: "Sill (TCP 7454)" added, and named as the allowing rule);
+  a device's ask row (an iPad's ask while the pairing window was hidden); Explorer restarting (the
+  icon came back); signing out (the iPad disconnected; Sill.log "Stopped." before the next run's
+  "starting at sign-in"). Not yet: the tray glyph on a light taskbar.
+- A device comes back by itself after Quit or a sign-out: the iPad reconnected 1.1 s after Sill.exe
+  advertised again (a sign-out replayed with WM_ENDSESSION, Sill.exe started 30 s later), its row
+  gone a second after the goodbye and shown as Remote meanwhile, as for a Mac. Not when the App
+  Store app's list has frozen: Sill 0.5.1 (4) never makes its Bonjour browser again once iOS has
+  suspended it (issue #69, fixed on main by pull request #77, not released), so its rows stay as
+  they were: the PC stays listed after its goodbye, the reconnect dials it twice and then shows
+  "Reconnecting to ‹PC›…" for good, and a new listing never shows. A tap still connects;
+  force-quitting and reopening Sill on the device brings the list back to life. Seen here, and
+  told apart by test listings announced from this PC (they never showed in the frozen app and came
+  and went in the reopened one) and by the iPad answering this PC's queries and responses.
+- The way back from the software encoder (encoderhealth.rs, win/probe.rs; the Mac's rule). Seen
+  here on 2026-10-19: two minutes into a 3840×2400 stream Intel's MFT slowed from 26 to 0 frames a
+  second and was given up on (nothing back for 1.5 s); its teardown finished within a second and
+  Windows logged no GPU reset, so busy rather than stuck. The software encoder then ran at full 4K
+  at 2–5 fps until the stream ended, and the next stream was back on the hardware at 55 fps. Now the
+  fallback runs at half scale and 60 fps at most, every stream starts there until a check passes,
+  and a check 30 s on (doubling to 300 s) brings the stream back with a keyframe. Measured with
+  `--encoder-check` on the Intel MFT beside a 4K stream of its own: 3840×2400 at 34–55 fps one frame
+  at a time (315–508 MP/s), 1920×1200 at 58–65. Verified with `--selftest --window` on a repainting
+  window: the forced hang, the fallback (562×378, keyframe with VPS/SPS/PPS first), back 3 s later
+  (146–241 fps at 1124×756 against 45 needed, keyframe first), a second hang within 5 minutes
+  (next check 6 s), a busy check (11–12 fps: checks 6, 12, 24 s apart); 11 unit tests. Found on the
+  way and fixed: every rebuild of a stream's encoder crashed the process on this Intel GPU (exit
+  0xC0000005: a window resized mid-stream, reproduced with the code before the fix; the way back
+  too), because the stream made each encoder from the same IMFActivate; now each one gets a fresh
+  activation object (a resize then logs "Source resized" and streams on). Not yet: the way back in
+  Sill.exe with a device (the core's kind 16 still says `softwareEncoder: false` meanwhile, so the
+  device shows no callout), and a GPU that is really busy (another app encoding).
+- Windows' mDNS responder, measured (`DnsServiceRegister` and `DnsServiceDeRegister`, as
+  `win/dnssd.rs` calls them): a registration probes three times on IPv4 and IPv6 and announces once,
+  on IPv4 only, with the host's A and AAAA records; a deregistration sends goodbyes (TTL 0) on both.
+  Its announcement sets the cache-flush bit on the shared `_sill._tcp` PTR, which RFC 6762 §10.2
+  forbids: listeners drop every other Sill host's row for an instant, and those hosts re-announce
+  within 0.1 s (two Macs here did, each time). Harmless so far; nothing in the API changes it.
+
+## Status (2026-10-19: first run on a PC)
+
+- Run on Windows 11 Pro (build 28120) on an XPS 13 (Intel graphics, 175 % scaling) against the App
+  Store iPad app (Sill 0.5.1 (4)): `--list` (windows front to back, Store apps by AUMID, 212 Start
+  menu apps, the Intel hardware HEVC MFT first; it is listed twice), `--selftest` (3840×2400 Desktop
+  on the Intel MFT, keyframe with VPS/SPS/PPS first, thumbnail and icon right), and `--pairing`:
+  the iPad paired by the typed code over TLS and streamed the Desktop and windows at 47–55 fps,
+  5–7 ms round trips. Frame age read ~90 ms because the PC's clock was ~89 ms behind (Windows Time
+  not syncing); the age is the device's clock minus the host's.
+- The pairing window (below, `pairview.rs`, `win/pairui.rs`), shown at the start when nothing is
+  paired, at a device's ask, and closed 3 s after "Paired". Seen on this PC at 175 %: the start,
+  an ask over the host's code, a wrong code, Paired, Stopped after 5, a device-opened window and its
+  Cancel (the device then refused `openOnMac`), New Code.
+- Found on the way, fixed or worked around: the firewall (Building: a program rule never matches an
+  exe on a Dev Drive or any volume mounted in a folder; use a port rule); the build needs a Visual
+  Studio install whose MSVC has the x64 libraries (here only 2019 Build Tools had them: build inside
+  its `vcvars64.bat`).
+
 ## Status (2026-10-14)
 
 - The whole `Platform` trait is implemented for Windows 10 1903+ and 11, and type-checks and lints
@@ -37,10 +120,26 @@ Owner: the Windows agent. Scope: `hosts/sill-host-windows/**` and this file.
 | `win/d3d.rs` | One D3D11 device per stream, on the first hardware HEVC encoder's adapter (MFT_ENUM_ADAPTER_LUID → EnumAdapterByLuid), BGRA + VIDEO support, multithread-protected, wrapped for WinRT (IDirect3DDevice) and MF (IMFDXGIDeviceManager). |
 | `win/capture.rs` | Windows.Graphics.Capture: GraphicsCaptureItem from the HWND or the primary HMONITOR (IGraphicsCaptureItemInterop), free-threaded frame pool (3 buffers, B8G8R8A8), IsCursorCaptureEnabled false, IsBorderRequired false (Win 11), MinUpdateInterval 1/fps (24H2). The FrameArrived handler keeps only the newest frame. Pool recreated when the content size changes; Closed → the stream ends ("The window closed."). |
 | `win/convert.rs` | D3D11 video processor: BGRA (full range RGB) → NV12 (BT.709, video range), scaled to the encoded size, auto-processing off. Colour spaces through ID3D11VideoContext1's DXGI types (RGB_FULL_G22_NONE_P709 → YCBCR_STUDIO_G22_LEFT_P709) where available (some drivers ignore the older struct's range), else the older struct. |
-| `win/encoder.rs` | MFTEnumEx(VIDEO_ENCODER, HEVC out): hardware (MFT_ENUM_FLAG_HARDWARE\|SORTANDFILTER) first, then software (SYNCMFT\|ASYNCMFT, NV12 in). Async MFTs unlocked (MF_TRANSFORM_ASYNC_UNLOCK), D3D-aware ones get the device manager. ICodecAPI: AVLowLatencyMode on, CBR at the bitrate, 1 s buffer, 0 B-frames, GOP fps×4 (the Mac's safety interval), QualityVsSpeed 0 with "prioritize speed" else 50; ForceKeyFrame per requested frame. Output type HEVC Main 4:2:0 8-bit with BT.709 video-range VUI, input NV12. Async events read by a thread blocking on GetEvent (shut down via IMFShutdown); each MFT detached from its IMFActivate right after activation (the activate caches its object, so a rebuild after a resize would otherwise get the shut-down MFT back). One frame inside at a time, raised to 2…4 only if an encoder returns nothing for 50 ms with fewer; frames inside are tracked by sample time (an output at time T settles every frame up to T, so a frame the encoder dropped does not linger). Output samples reused while ProcessOutput gives nothing. Stream changes renegotiated; parameter sets from the stream or MF_MT_MPEG_SEQUENCE_HEADER. A non-D3D encoder gets NV12 bytes read back through a staging texture. |
-| `win/stream.rs` | The stream thread: newest WGC frame → copied into our own BGRA texture (the capture buffer goes back at once) → converter → encoder, paced to `fps`, frames dropped never queued. Keyframe requests ride the next frame, or re-encode the last picture once the source has been still 50 ms. A content size that holds for 150 ms rebuilds converter and encoder. A hardware encoder that errors, is full with nothing back for 1.5 s, or keeps new frames out for 1.5 s without asking for input is replaced by the software one, once (the hung one is torn down on a thread of its own, since a wedged driver can block its teardown); then the stream ends with the reason. A still source whose encoder still holds a frame after 100 ms gets the last picture once more, so the last change reaches the devices. `timeBeginPeriod(1)` while streaming (60/120 fps pacing). `source_rect`: the window's frame bounds or the monitor's rect, physical px. |
+| `win/encoder.rs` | MFTEnumEx(VIDEO_ENCODER, HEVC out): hardware (MFT_ENUM_FLAG_HARDWARE\|SORTANDFILTER) first, then software (SYNCMFT\|ASYNCMFT, NV12 in). Async MFTs unlocked (MF_TRANSFORM_ASYNC_UNLOCK), D3D-aware ones get the device manager. ICodecAPI: AVLowLatencyMode on, CBR at the bitrate, 1 s buffer, 0 B-frames, GOP fps×4 (the Mac's safety interval), QualityVsSpeed 0 with "prioritize speed" else 50; ForceKeyFrame per requested frame. Output type HEVC Main 4:2:0 8-bit with BT.709 video-range VUI, input NV12. Async events read by a thread blocking on GetEvent (shut down via IMFShutdown); every encoder made from a new IMFActivate, found again by name, kind and adapter (`activation`): Intel's activate makes its MFT once, and asked again after that MFT was shut down (a resize, the way back from the software encoder) it crashed the process with an access violation, detached or not (this XPS 13, 2026-10-19); the MFT is still detached from it. `retire()`: a given-up encoder's late outputs go nowhere. One frame inside at a time, raised to 2…4 only if an encoder returns nothing for 50 ms with fewer; frames inside are tracked by sample time (an output at time T settles every frame up to T, so a frame the encoder dropped does not linger). Output samples reused while ProcessOutput gives nothing. Stream changes renegotiated; parameter sets from the stream or MF_MT_MPEG_SEQUENCE_HEADER. A non-D3D encoder gets NV12 bytes read back through a staging texture. |
+| `win/stream.rs` | The stream thread: newest WGC frame → copied into our own BGRA texture (the capture buffer goes back at once) → converter → encoder, paced to `fps`, frames dropped never queued. Keyframe requests ride the next frame, or re-encode the last picture once the source has been still 50 ms. A content size that holds for 150 ms rebuilds converter and encoder. A hardware encoder that errors, is full with nothing back for 1.5 s, or keeps new frames out for 1.5 s without asking for input is replaced by the software one at half scale and 60 fps at most (`encoderhealth.rs`; the hung one is retired and torn down on a thread of its own, in COM, since a wedged driver can block its teardown), and every stream starts on the software encoder until a check of the hardware passes: 30 s after the fallback, then twice as long after each failed check up to 300 s, on a thread of its own (`win/probe.rs`, one at a time for the process); a pass rebuilds the chain on the hardware with a keyframe. A software encoder that fails ends the stream with the reason. TEST ONLY: `SILL_TEST_ENCODER_HANG=N` (the first N hardware encoders take no frame after their 90th), `SILL_TEST_RECHECK_SECONDS=N` (checks N to 10 N s apart). A still source whose encoder still holds a frame after 100 ms gets the last picture once more, so the last change reaches the devices. `timeBeginPeriod(1)` while streaming (60/120 fps pacing). `source_rect`: the window's frame bounds or the monitor's rect, physical px. |
 | `win/mod.rs` | `WindowsPlatform`; per-monitor-v2 DPI awareness set once at start (so window rects, capture, SendInput and GetCursorPos all speak physical pixels); `release_input()`. |
-| `selftest.rs` | `--selftest` / `--list` (below). |
+| `selftest.rs` | `--selftest` / `--list` / `--encoder-check` (below). |
+| `encoderhealth.rs` (portable) | The way back from the software encoder, the Mac's "busy, not stuck" rule: on the software encoder or not (shared by every stream), when to check (30 s, doubling to 300; a hang within 5 min of a return doubles, a return that lasted 10 min starts over), the bar a check must pass (0.75 × the stream's rate up to 60, never more than 0.75 × the engine's own rate at that size: 250 MP/s assumed, the best check measured after), the lines. |
+| `win/probe.rs` | The check: a new hardware encoder on a D3D device of its own, three NV12 frames of a test pattern (a gradient, a moving bar, a little noise) fed as a stream feeds it, the rate the last 7 of 10 came back at; a frame inside for 1 s is no answer. A passing check's encoder shuts down before it answers. TEST ONLY: `SILL_TEST_PROBE_HOLD=S` (each frame held S s: 0.08 reads busy, 1 or more no answer). |
+| `bin/sill.rs` | Sill.exe's `main`: `win::tray::run(--login?)`. |
+| `applog.rs` (portable) | The log sink: Sill.log (local time in front, Sill.1.log at 10 MB; `SILL_TEST_LOG_ROTATE_BYTES`) and the last 5,000 lines for the log window; a panic is logged. |
+| `settings.rs` (portable) | settings.json: `#[serde(default)]`, unknown keys ignored, values snapped to the menu's, written whole then renamed. |
+| `traymenu.rs` (portable) | The tray's card and menu as data (StatusText.swift's rules, MenuBuilder's order); `dump` writes it as Sill.app's menu.txt (`SILL_TEST_MENU_DUMP`). |
+| `glyph.rs` (portable) | StatusGlyph.swift's four glyphs as coverage masks at any size (4×4 samples a pixel). |
+| `fwpolicy.rs` (portable) | Whether the firewall lets devices in on the port, from its profiles and rules, in Windows' order; only a rule for the port itself (no program, no service, any address or the local subnet, Wi-Fi/LAN) counts as allowing, a block rule for Sill.exe counts. |
+| `win/tray.rs` | The icon (a hidden top-level window: TaskbarCreated, WM_SETTINGCHANGE, WM_ENDSESSION reach it), `Shell_NotifyIconW` v4, the menu (TrackPopupMenuEx + TPM_RETURNCMD, no state held across it), a 1 s tick (glyph, tooltip "Sill — ‹header›", settings saved), Quit with a 3 s hard exit, sign-out's goodbye. TEST ONLY: `SILL_TEST_ACTIONS=1` (WM_APP+20 does a menu action, so tests never type into the screen), `SILL_TEST_ICON_DUMP=<dir>` (each icon as a PNG). |
+| `win/logwindow.rs` | "Sill Log": an EDIT (limit raised, appends without undo, the oldest 500 cut past 5,500), Show per-second stats, Clear, Open Log Folder. |
+| `win/login.rs` | Launch at Login: HKCU Run `Sill` = `"…\Sill.exe" --login`; StartupApproved's "off" (Task Manager) honoured: the menu sends the person to Settings › Startup. `--login` keeps the pairing window down at sign-in. |
+| `win/firewall.rs` | INetFwPolicy2 read on a worker thread (every minute; the menu shows the last answer); Allow… = elevated `netsh … localport=7454 profile=private` (one UAC prompt; declined changes nothing; not added when already allowed). |
+| `win/theme.rs` | Light or dark as the app mode is (AppsUseLightTheme), followed live (WM_SETTINGCHANGE "ImmersiveColorSet"): the tray's menus through uxtheme's app mode (ordinals 135, 136, 104, 133: undocumented, as Explorer and Windows Terminal use them; missing, the menu stays light), the pairing and log windows with a dark title bar (DWM), their own colours (`Palette`) and Explorer's dark theme on buttons and scroll bars. The QR code stays black on a white card. TEST ONLY: `SILL_TEST_THEME=dark\|light`. |
+| `res/Sill.ico` | The Mac app's icon (design/AppIcon.svg rendered by Edge, cut to its rounded square), 16–256 px; `build.rs` embeds it with a version resource in Sill.exe only (embed-resource). |
+| `pairview.rs` (portable) | The pairing window's state and words from the core's `PairingEvent`s (Sill.app's PairDeviceWindow): the host's own code ("tap ‹host›", "Can’t scan? …", New Code, Close), a device's ask over it, a window a device's ask opened ("‹device› on this network asked to pair.", "Didn’t ask for this? Click Cancel."), a wrong code, "Paired with ‹device›." for 3 s then closed, Stopped; when it comes up (at the start only when nothing is paired; an ask brings it up without the keyboard). |
+| `win/pairui.rs` | "Pair iPhone or iPad": one Win32 window on a thread of its own, made at the first pairing event; the core's threads queue events and post a message. STATIC controls for the words (Narrator reads them), the QR code painted with GDI (`qrcodegen`, MIT), the system's buttons (Common Controls v6 through `build.rs`'s embedded manifest, MSVC only), per-monitor DPI. Close only hides it (the host's code keeps working, as the console's); Cancel on a device-opened window is `PairingControl::cancel`. |
 
 ## Building
 
@@ -79,12 +178,37 @@ cd hosts
 cargo build -p sill-host-windows --release
 target\release\sill-host-windows.exe --list
 target\release\sill-host-windows.exe --selftest --frames 300 --out %TEMP%
+target\release\sill-host-windows.exe --encoder-check [WxH]   # the hardware encoder's rate, as the way back checks it
 target\release\sill-host-windows.exe            # the host; allow it through Windows Firewall
 ```
 
-Devices (Debug builds of the apps, which still dial the plain door) find it by Bonjour, or by
-address with the Mac viewer's `-SillConnect <pc-ip>:<port>` (the port is in the "Home door" line;
-`--port=N` fixes it). Windows Firewall asks the first time the host listens: allow "Private".
+A fallback and the way back without a busy GPU: `set SILL_TEST_ENCODER_HANG=1` and
+`set SILL_TEST_RECHECK_SECONDS=3`, then `--selftest --window <id>` on a window that keeps
+repainting (the hardware encoder stops taking frames at the 90th, the software one takes over at
+half the size, the hardware one is back about 3 s later); add `SILL_TEST_PROBE_HOLD=0.08` for a
+check that reads busy and backs off.
+
+Release builds of the apps (the App Store's, TestFlight's) dial only a TLS door: run
+`sill-host-windows.exe --pairing --port=7454` and pair with the code in the window (or on the
+console). Debug builds also dial the plain door, by Bonjour or by address with the Mac viewer's
+`-SillConnect <pc-ip>:<port>` (the port is in the "Home door" line; `--port=N` fixes it).
+
+The firewall: Windows may ask the first time the host listens (it did not here). A rule for the
+program never matches when the exe sits on a Dev Drive or any volume mounted in a folder (the
+filter compiles `C:\…` to the C: volume's path, the running exe is `\device\harddiskvolumeN\…`),
+and Windows then drops every connection in silence (`pktmon` shows "INET: accept inspection"; the
+mDNS answers still go out, so the device lists the PC and never reaches it). A port rule works
+anywhere, from an elevated PowerShell:
+
+```
+New-NetFirewallRule -DisplayName "Sill host" -Direction Inbound -Action Allow -Profile Private -Protocol TCP -LocalPort 7454
+```
+
+`SILL_DEBUG_DOOR=1` logs every connection at the door (NOTES-core.md): none at all while a device
+says it "didn't answer" is the firewall.
+
+If `link.exe` cannot open `msvcrt.lib`, the Visual Studio picked has no x64 C++ libraries: build
+inside the `vcvars64.bat` of an install that has them (Build Tools with the C++ workload).
 
 ## Requirements on the PC
 
@@ -150,11 +274,12 @@ and AppsFolder scans, ShellExecute launches, icons (incl. whether the shell's bi
 premultiplied), PrintWindow thumbnails, SendInput of every kind (incl. scancode/extended choices
 per key and the KEYEVENTF_UNICODE surrogate handling), the foreground nudge and AttachThreadInput,
 resize settling, WM_SYSCOMMAND commands, cursor capture (colour, monochrome, animated cursors),
-DnsServiceRegister (incl. whether a NULL address makes Windows publish the host's own addresses),
-WGC on Windows 10 vs 11 (cursor/border flags), the video processor's colour conversion, every
+DnsServiceRegister on a Public network profile (on a Private one it publishes the host's own
+addresses: Status), WGC on Windows 10 vs 11 (cursor/border flags), the video processor's colour conversion, every
 encoder vendor's behaviour (NV12 surfaces with BIND_VIDEO_ENCODER, async event flow,
 ForceKeyFrame honoured, low-latency output per input, SPS VUI), the software encoder path
-(readback), size changes, the hardware → software fallback, timeBeginPeriod pacing at 120 fps,
+(readback; run on Intel's GPU here), the fallback and the way back on a GPU another app keeps busy
+(forced and run here: Status), timeBeginPeriod pacing at 120 fps,
 and DPI awareness.
 
 ## Review

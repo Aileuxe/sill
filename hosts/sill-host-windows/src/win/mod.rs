@@ -8,15 +8,24 @@ pub mod cursor;
 pub mod d3d;
 pub mod dnssd;
 pub mod encoder;
+pub mod firewall;
 pub mod gdi;
 pub mod input;
+pub mod login;
+pub mod logwindow;
+pub mod pairui;
+pub mod probe;
 pub mod stream;
+pub mod theme;
+pub mod tray;
 pub mod util;
 pub mod winops;
 
 use std::sync::{Arc, Mutex};
 
-use sill_host_core::platform::{App, Input, Platform, Stream, StreamConfig, StreamSink, Window, WindowCommand};
+use sill_host_core::platform::{
+    App, Input, PairingControl, PairingEvent, Platform, Stream, StreamConfig, StreamSink, Window, WindowCommand,
+};
 use windows::Win32::System::SystemInformation::{ComputerNamePhysicalDnsHostname, GetComputerNameExW};
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
 
@@ -177,6 +186,13 @@ impl Platform for WindowsPlatform {
     fn advertise(&self, instance: &str, port: u16, txt: &[(String, String)]) -> Result<Box<dyn Send>, String> {
         let host = self.machine_name();
         dnssd::advertise(instance, &host, port, txt).map(|a| Box::new(a) as Box<dyn Send>)
+    }
+
+    fn pairing_changed(&self, event: PairingEvent, control: Arc<dyn PairingControl>) {
+        // Sill.exe's menu shows a device's ask too; the console host has no tray, and the call
+        // only notes it.
+        tray::note_pairing(&event);
+        pairui::post(event, control);
     }
 }
 

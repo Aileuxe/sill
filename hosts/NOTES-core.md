@@ -2,6 +2,39 @@
 
 ## Status (newest first)
 
+- **2026-10-19, for Sill.exe (the Windows tray app):**
+  - `host::start(platform, opts) -> Result<Host, String>`: what `run()` did up to the coordinator,
+    which now runs on a thread of its own; the listeners are bound first, so a port in use fails
+    before any thread starts (an app may try again). `Host::handle()` is a `HostHandle`:
+    `status()` (a `status::HostStatus`: name, port, TLS or not, advertised, each device with its
+    last report, what streams, the settings, paired count), `change(ConfigChange)` (the fields a
+    menu item sets, laid over the live settings: one restart rule and kind 16 for everyone, shared
+    with a device's kind 17 through `apply_config`), `quit()` (once; goodbye, then `Host::join`
+    returns at once: no 2 s wait). `run()` is `start` + Ctrl-C → `quit` + `join`; its output is
+    as before.
+  - `HostOptions.persistent` → kind 16's `persistent` (the app saves changes);
+    `HostOptions.codes_in_log` (true for the CLI): false keeps pairing codes and links out of the
+    log ("Pair with the code in the pairing window"), as Sill.app never logs one.
+  - `set_log_sink(f)`: every `log` line to `f` instead of stdout (stdout stays the default).
+  - Two fixes in `bind()` (found running two hosts on one port on Windows): no SO_REUSEADDR on
+    Windows (it lets a second socket bind a listening port), and no IPv4 fallback when the dual-
+    stack bind fails with "in use" or "access denied" (Windows lets an IPv4 listener share a port
+    with another's dual-stack one, so the second host "started" and they split connections). Now
+    the second fails: "Listener failed: … (os error 10048)". `stats::start_printing` runs once a
+    process.
+  - Tests: `host::tests` (start, a device's kind 16 with `persistent` and the handle's change,
+    status, quit in well under 2 s; a second host on the same port fails).
+- **2026-10-19, for the Windows pairing window and a first run on a PC:**
+  - `Platform::pairing_changed(event, control)` (additive, default no-op; "Trait changes"): every
+    change to the pairing window as a `PairingEvent` (a code with its link, expiry, asker, paired
+    count and host name; an ask; a device's own cancel; a wrong code; paired; stopped; cancelled),
+    and a `PairingControl` for a UI's buttons (`new_code`, `cancel`: the Mac's Cancel, the code
+    stops and the asker stays quiet 10 minutes). The console's lines are unchanged. Test
+    `pairing::tests::the_observer_hears_each_change_and_the_buttons_work`.
+  - `SILL_DEBUG_DOOR=1`: one line per connection at the TLS doors as it arrives (its origin), its
+    ClientHello's ALPN, the handshake, and how it ended (admitted, refused with the word, or gone and
+    why). Off by default; the Mac logs none of it. Found the PC's first failure: nothing reached the
+    door at all (the firewall, NOTES-windows.md), which no log said.
 - **2026-10-14, fixes from the Linux agent's findings:**
   - `FfmpegEncoder`: a keyframe asked for before the first frame made every frame an IDR (the
     first frame's odd timestamp became FFmpeg's start time, and FFmpeg shifts every timestamp by
@@ -75,6 +108,14 @@ fn main() {
   lines go ("Client connected: …", "[1s] enc.out 60  net.sent 60 …", "Test input: …").
 - Stats: `sill_host_core::stats::bump("key")` adds to the once-a-second line (use your own keys,
   e.g. `cap.frames`, `cap.dropped`).
+
+An app with its own UI (Sill.exe) uses `start` instead and keeps the `Host`:
+
+```rust
+let host = sill_host_core::start(platform, options)?;      // a port in use fails here
+let handle = host.handle();                                 // status(), change(..), quit()
+// … later, from the UI: handle.quit(); host.join()?;
+```
 
 ### What the core calls, and from where
 
@@ -290,6 +331,10 @@ input (they check the listener's arguments).
 
 ## Trait changes
 
+- 2026-10-19 (additive): `Platform::pairing_changed(&self, PairingEvent, Arc<dyn PairingControl>)`
+  with a default no-op, called from the core's threads (never under its locks) for each change to
+  the pairing window; `PairingEvent` and `PairingControl` are new in platform.rs. For a backend with
+  a window of its own (sill-host-windows' "Pair iPhone or iPad"); the console has every code anyway.
 - 2026-10-14 (additive): `Platform::release_all_input(&self)` with a default no-op. The core calls
   it once when it stops (after releasing each device's held keys and buttons through `inject`).
   Answers NOTES-windows.md request 1: per-device release is the core's (it tracks what each
